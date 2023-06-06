@@ -1,5 +1,6 @@
 import autograd.numpy as np
 import autograd.numpy.linalg as la
+import torch
 from typing import List, Union
 from abc import ABC, abstractmethod
 from mdpexplore.env.discrete_env import Environment
@@ -239,3 +240,104 @@ class DesignBayesA(RewardFunctional):
             return -np.trace(la.inv(z + (1./episodes) * self.lambd))
 
 
+class DesignSimpleBandits(RewardFunctional):
+
+    def __init__(self, action_space_size):
+        super().__init__()
+        # This throws a warning
+        self.mu = np.ones(action_space_size) * np.inf
+        self.type = "adaptive"
+
+    def eval(self, emissions, distribution, visitations, episodes):
+        return distribution @ self.mu - np.max(self.mu)
+
+    def eval_full(self,
+                  emissions: np.ndarray,
+                  distribution: np.ndarray,
+                  episodes: int = 0) -> float:
+        return distribution @ self.mu - np.max(self.mu)
+
+
+class DesignBandits(RewardFunctional):
+
+    def __init__(self, action_space_size, lambd, variant: int = 0, eps=0.01):
+
+        super().__init__()
+
+        self.ucbs = np.ones(action_space_size) * np.inf
+        self.lcbs = -1 * np.ones(action_space_size) * np.inf
+        self.type = "adaptive"
+        self.lambd = lambd
+        self.variant = variant
+        self.eps = eps
+
+    def _restrict_best_action_space(self, emissions):
+
+        best_pred = np.argmax(self.ucbs)
+        best_lb = self.lcbs[best_pred]
+        restriction_mask = self.ucbs >= best_lb
+        return emissions[restriction_mask]
+
+    def _estimate_building_blocks(self, emissions, V_eta_inv):
+        restricted_action_space = self._restrict_best_action_space(emissions)
+        n, m = restricted_action_space.shape
+
+        # Reshape the arrays to have compatible shapes for broadcasting
+        # and compute differences between all possible row pairs. Choosing
+        # a max over this set upperbounds max_z ||z - z^*||_V_eta_inv
+        arr1_reshaped = restricted_action_space.reshape(n, 1, m)
+        arr2_reshaped = restricted_action_space.reshape(1, n, m)
+        diffs = arr1_reshaped - arr2_reshaped
+        diffs = diffs.reshape((-1, diffs.shape[-1]))
+
+        # Compute the lower bounds on the possible denominators.
+        denominators = np.ones_like(self.ucbs) * self.eps
+        denominators[self.ucbs < 0] = self.ucbs[self.ucbs < 0] ** 2
+        denominators[self.lcbs > 0] = self.lcbs[self.lcbs > 0] ** 2
+
+        if self.variant == 0:
+            star_id = np.argmax(np.apply_along_axis(lambda x: x @ V_eta_inv @ x.T, 1, diffs))
+            diff_star = diffs[star_id]
+
+            d = np.min(denominators)
+        elif self.variant == 1:
+            nominators = np.apply_along_axis(lambda x: x @ V_eta_inv @ x.T, 1, diffs)
+            star_id = np.argmax(nominators / denominators)
+            diff_star = diffs[star_id]
+
+            d = denominators[star_id]
+        else:
+            raise NotImplemented
+
+        return d, diff_star
+
+    def eval(self, emissions, distribution, visitations, episodes):
+        V_eta = emissions.T @ np.diag(distribution) @ emissions
+        V_eta_inv = np.linalg.inv(V_eta + self.lambd * np.identity(V_eta.shape[0]))
+
+        _, diff_star = self._estimate_building_blocks(emissions, V_eta_inv)
+        return diff_star
+
+    def eval_full(self,
+                  emissions: np.ndarray,
+                  distribution: np.ndarray,
+                  episodes: int = 0) -> float:
+        V_eta = emissions.T @ np.diag(distribution) @ emissions
+        V_eta_inv = np.linalg.inv(V_eta + self.lambd * np.identity(V_eta.shape[0]))
+
+        _, diff_star = self._estimate_building_blocks(emissions, V_eta_inv)
+        return diff_star
+
+    def gradient(self, emissions: np.ndarray, distribution: np.array):
+
+        V_eta = emissions.T @ np.diag(distribution) @ emissions
+        V_eta_inv = np.linalg.inv(V_eta + self.lambd * np.identity(V_eta.shape[0]))
+
+        d, diff_star = self._estimate_building_blocks(emissions, V_eta_inv)
+
+        def partial(x):
+            return - np.sum(
+                (diff_star[:, None] @ diff_star[None, :]) * (V_eta_inv @ x[:, None] @ x[None, :] @ V_eta_inv))
+
+        gradient = np.apply_along_axis(partial, 1, emissions)
+        return gradient / d

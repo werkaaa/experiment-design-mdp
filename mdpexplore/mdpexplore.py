@@ -30,7 +30,7 @@ class MdpExplore():
             verbosity: int = 0,
             optimize_repetitions: bool = False,
             initial_policy: bool = False,
-            callback: Union[Callable, None] = None
+            callback: Union[Callable, None] = None,
     ) -> None:
 
         """Class containing components required to run the maximum entropy exploration algorithm
@@ -179,6 +179,10 @@ class MdpExplore():
         Returns:
             np.ndarray: gradient of the functional wrt to the state distribution - i.e. the reward function
         """
+        grad_fn = getattr(self.objective, "gradient", None)
+        if callable(grad_fn):
+            return grad_fn(self.emissions, distribution)
+
         if self.objective.get_type() == "adaptive":
             grad_fn = grad(lambda d: self.objective.eval(self.emissions, d, self.visitations, self.episodes))
         else:
@@ -226,6 +230,7 @@ class MdpExplore():
                 summarized_policy = SummarizedPolicyType(
                     self.env, self.policies, self.weights
                 )
+            # TODO: Should I add the max policy?
 
             self.trajectory.append(self.env.init_state)
             for _ in range(self.env.max_episode_length):
@@ -268,7 +273,6 @@ class MdpExplore():
             reward = self._reward_fn_gradient(density)
             if self.objective.get_type() != "adaptive":
                 self.objective_values_baseline.append(self.objective.eval(self.emissions, density, self.episodes))
-
             new_policy = self._planning_oracle(reward)
             self.policies.append(new_policy)
             #
