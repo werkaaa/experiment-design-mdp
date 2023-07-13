@@ -230,7 +230,6 @@ class MdpExplore():
                 summarized_policy = SummarizedPolicyType(
                     self.env, self.policies, self.weights
                 )
-            # TODO: Should I add the max policy?
 
             self.trajectory.append(self.env.init_state)
             for _ in range(self.env.max_episode_length):
@@ -430,3 +429,10 @@ class MdpExplore():
             opt = None
 
         return objective_values, opt
+
+# TODO:
+# 1. Resolve comments
+# 2. Make a test (with make) - plot the convergence
+# 2.5 Make a test (so run the optimization n times (from plot_pharma.py) and look at the mean gap and error bars - they should both go to zero
+# 3. Add the simplex plots
+# 4. Write down the summary of the project
